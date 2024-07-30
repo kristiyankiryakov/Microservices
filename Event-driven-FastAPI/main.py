@@ -43,9 +43,26 @@ async def get_state(pk: str):
     state = redis.get(f"delivery:{pk}")
 
     if state is not None:
-        return json.dumps(state)
+        return json.loads(state)
+
+    state = build_state(pk)
+    redis.set(f"delivery:{pk}", json.dumps(state))
     
-    return {"error": "Delivery not found"}
+    return state
+
+
+def build_state(pk: str):
+    # Events should come in the order of creation !
+    pks = Event.all_pks()  
+    
+    all_events = [Event.get(pk) for pk in pks]
+    events = [event for event in all_events if event.delivery_id == pk]
+    state = {}
+
+    for event in events:
+        state = consumers.CONSUMERS[event.type](state, event)
+
+    return state
 
 
 @app.post("/deliveries/create")
@@ -60,3 +77,16 @@ async def create(request: Request):
     state = consumers.create_delivery({}, event)
     redis.set(f"delivery:{delivery.pk}", json.dumps(state))
     return state
+
+
+@app.post("/event")
+async def dispatch(request: Request):
+    body = await request.json()
+    delivery_id = body["delivery_id"]
+    event = Event(
+        delivery_id=delivery_id, type=body["type"], data=json.dumps(body["data"])
+    )
+    state = await get_state(delivery_id)
+    new_state = consumers.CONSUMERS[event.type](state, event)
+    redis.set(f"delivery:{delivery_id}", json.dumps(new_state))
+    return new_state
