@@ -2,6 +2,7 @@ import json
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from redis_om import get_redis_connection, HashModel
+import consumers
 
 app = FastAPI()
 
@@ -37,6 +38,16 @@ class Event(HashModel):
         database = redis
 
 
+@app.get("/deliveries/{pk}/status")
+async def get_state(pk: str):
+    state = redis.get(f"delivery:{pk}")
+
+    if state is not None:
+        return json.dumps(state)
+    
+    return {"error": "Delivery not found"}
+
+
 @app.post("/deliveries/create")
 async def create(request: Request):
     body = await request.json()
@@ -44,6 +55,8 @@ async def create(request: Request):
         budget=body["data"]["budget"], notes=body["data"]["notes"]
     ).save()
     event = Event(
-        delivery_id=delivery.pk, type=body['type'], data=json.dumps(body['data'])
+        delivery_id=delivery.pk, type=body["type"], data=json.dumps(body["data"])
     )
-    return event
+    state = consumers.create_delivery({}, event)
+    redis.set(f"delivery:{delivery.pk}", json.dumps(state))
+    return state
